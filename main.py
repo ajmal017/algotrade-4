@@ -39,6 +39,17 @@ CONSTANT_QUANTITIY_TO_ORDER = 1
 BASE_REQUEST_NUMBER = 1000
 
 
+# SYMBOLS = ['MU']
+# SYMBOLS = ['MU', 'AAPL', 'MSFT', 'JD', 'PDD', 'FSLY', 'BABA']
+SYMBOLS = ["AAPL", "MSFT", "FB", "BABA", "TSM", "V", "JPM", "JNJ", "WMT", "PG", "DIS", "HD"]# "PYPL", "INTC", "VZ",
+           #"NKE", "NVS", "MRK", "TM", "CRM", "ABT", "PEP", "ABBV", "PDD", "ORCL", "BHP", "LLY", "CVX", "QCOM", "DHR"]
+           # "ACN", "NVO", "NEE", "MDT", "TMUS", "UL", "MCD", "TXN", "SAP", "BMY", "BBL", "HON", "UNP", "AMGN", "UPS",
+           # "HDB", "C", "JD", "LIN", "MS", "BUD", "AZN", "LOW", "SNE", "PM", "RY", "SBUX", "SE", "BA", "IBM", "SCHW",
+           # "AMD", "TD", "SQ", "RTX", "CAT", "RIO", "UBER", "TGT", "CVS", "AXP", "AMT", "MMM", "AMAT", "DE",
+           # "DEO", "EL", "SYK", "MU", "NIO", "BIDU", "MDLZ", "TJX", "FIS", "CI", "CNI", "GILD", "ZTS", "BDX", "BEKE",
+           # "NTES", "GM", "FISV", "PLD", "CL", "CSX", "TFC", "CB", "ATVI"]
+
+
 class WaitList(list):
     def __init__(self, max_len: int):
         self.max_len = max_len
@@ -141,17 +152,6 @@ def generate_request_index():
     """
     globals()['BASE_REQUEST_NUMBER'] += 1
     return BASE_REQUEST_NUMBER
-
-
-# SYMBOLS = ['MU']
-# SYMBOLS = ['MU', 'AAPL', 'MSFT', 'JD', 'PDD', 'FSLY', 'BABA']
-SYMBOLS = ["AAPL", "MSFT", "FB", "BABA", "TSM", "V", "JPM", "JNJ", "WMT", "PG", "DIS", "HD", "PYPL", "INTC", "VZ",
-           "NKE", "NVS", "MRK", "TM", "CRM", "ABT", "PEP", "ABBV", "PDD", "ORCL", "BHP", "LLY", "CVX", "QCOM", "DHR"]
-           # "ACN", "NVO", "NEE", "MDT", "TMUS", "UL", "MCD", "TXN", "SAP", "BMY", "BBL", "HON", "UNP", "AMGN", "UPS",
-           # "HDB", "C", "JD", "LIN", "MS", "BUD", "AZN", "LOW", "SNE", "PM", "RY", "SBUX", "SE", "BA", "IBM", "SCHW",
-           # "AMD", "TD", "SQ", "RTX", "CAT", "RIO", "UBER", "TGT", "CVS", "AXP", "AMT", "MMM", "AMAT", "DE",
-           # "DEO", "EL", "SYK", "MU", "NIO", "BIDU", "MDLZ", "TJX", "FIS", "CI", "CNI", "GILD", "ZTS", "BDX", "BEKE",
-           # "NTES", "GM", "FISV", "PLD", "CL", "CSX", "TFC", "CB", "ATVI"]
 
 symbol_objects = {symbol_name: Symbol(symbol_name) for symbol_name in SYMBOLS}
 ID_TO_SYMBOL = {symbol.id: symbol.name for symbol in symbol_objects.values()}
