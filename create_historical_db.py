@@ -38,8 +38,7 @@ TIME_TO_PERFROM_CANDLE_ANALYSIS = 59580  # "16:35:00"
 CONSTANT_QUANTITIY_TO_ORDER = 1
 BASE_REQUEST_NUMBER = 1000
 
-SYMBOLS = ["BABA","MSFT"]
-#SYMBOLS = ["AAPL"]
+SYMBOLS = ["NIO", "NKE", "QCOM", "FB", "LMND", "RUN", "NET"]
 
 
 class WaitList(list):
@@ -124,10 +123,10 @@ class Symbol:
 
     def calc_stop_value(self) -> float:
 
-        return symbol_object.first_close - symbol_object.first_diff
+        return self.first_close - self.first_diff
 
     def calc_market_sell_value(self) -> float:
-        return symbol_object.first_close + symbol_object.first_diff * 2
+        return self.first_close + (self.first_diff * 2)
 
     def calc_profit(self) -> t.Union[float, None]:
         """
@@ -239,8 +238,8 @@ class IBapi(Wrapper, EClient):
 
         for idx, end_datetime in enumerate(DATES_TO_CONSIDER):
             self.request_bars_for_stock(symbol_name, end_datetime)
-            if idx % 60 == 0 and idx>1:
-                time.sleep(600)
+            if idx % 60 == 0 and idx > 1:
+                time.sleep(20)
         wait_for_no_open_historical_requests()
 
     def order_collected_historical_data(self):
@@ -464,10 +463,10 @@ for symbol_name in SYMBOLS:
     print(symbol_name)
     AMOUNT_OF_DAYS = 239
     app.get_days_historical_data(symbol_name, AMOUNT_OF_DAYS)
+    time.sleep(100)
     list_of_data = [vars(bar) for bar in sorted(list(app.fetched_data[symbol_name].values()), key=lambda x: x.date)]
     csv_dataframe = pd.DataFrame.from_dict(list_of_data)
     # csv_dataframe.append(app.fetched_data[symbol_name])
     csv_dataframe.to_csv(f'{symbol_name}_{AMOUNT_OF_DAYS}_{DAY_OF_TRADE_ANALYSIS_FORMATTED}.csv', index=False)
-
 
 app.disconnect()

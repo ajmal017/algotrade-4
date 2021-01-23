@@ -132,10 +132,10 @@ class Symbol:
 
     def calc_stop_value(self) -> float:
 
-        return symbol_object.first_close - symbol_object.first_diff
+        return self.first_close - self.first_diff
 
     def calc_market_sell_value(self) -> float:
-        return symbol_object.first_close + symbol_object.first_diff * 2
+        return self.first_close + self.first_diff * 2
 
     def calc_profit(self) -> t.Union[float, None]:
         """
@@ -460,48 +460,48 @@ def wait_for_no_open_historical_requests():
         else:
             return
 
+def main():
+    app = setup_app()
+    api_thread = threading.Thread(target=run_loop, daemon=True)
+    api_thread.start()
+    time.sleep(0.3)
 
-app = setup_app()
-api_thread = threading.Thread(target=run_loop, daemon=True)
-api_thread.start()
-time.sleep(0.3)
+    app.get_3_days_historical_data()
+    get_4fat_values_for_symbols()
+    if TRADE_MODE:
+        wait_for_end_of_candle_for_new_market_day(1)
+    get_first_candle_of_market_day_for_symbols()
 
-app.get_3_days_historical_data()
-get_4fat_values_for_symbols()
-if TRADE_MODE:
-    wait_for_end_of_candle_for_new_market_day(1)
-get_first_candle_of_market_day_for_symbols()
+    if HISTORICAL_MODE:
+        get_entire_current_day_of_data()
 
-if HISTORICAL_MODE:
-    get_entire_current_day_of_data()
+    for symbol_name in SYMBOLS:
+        symbol_object = symbol_objects[symbol_name]
+        # print('%%%%%%%%%%%%%')
+        # print(f'{symbol_name}')
+        # print(f'current value - {symbol_object.first_value}')
+        # print(f'4fat - {symbol_object.collected_4fat}')
+        if symbol_object.is_eligible_to_purchase():
+            # print(f'{symbol_object} is good for buying. waiting for passage of candle 1 max value to buy.')
+            symbol_object.intention_to_buy = True
+            if TRADE_MODE:
+                app.place_buy_market(symbol_object.first_max, CONSTANT_QUANTITIY_TO_ORDER, symbol_object.contract)
+            if HISTORICAL_MODE:
+                # print('testing historically')
+                symbol_object.buying_price = symbol_object.first_close
+                symbol_object.buying_cap = symbol_object.buying_price * CONSTANT_QUANTITIY_TO_ORDER
+                symbol_object.selling_price = test_historically_for_outcome(symbol_object)
+                symbol_object.selling_cap = symbol_object.selling_price * CONSTANT_QUANTITIY_TO_ORDER
 
-for symbol_name in SYMBOLS:
-    symbol_object = symbol_objects[symbol_name]
-    # print('%%%%%%%%%%%%%')
-    # print(f'{symbol_name}')
-    # print(f'current value - {symbol_object.first_value}')
-    # print(f'4fat - {symbol_object.collected_4fat}')
-    if symbol_object.is_eligible_to_purchase():
-        # print(f'{symbol_object} is good for buying. waiting for passage of candle 1 max value to buy.')
-        symbol_object.intention_to_buy = True
-        if TRADE_MODE:
-            app.place_buy_market(symbol_object.first_max, CONSTANT_QUANTITIY_TO_ORDER, symbol_object.contract)
-        if HISTORICAL_MODE:
-            # print('testing historically')
-            symbol_object.buying_price = symbol_object.first_max
-            symbol_object.buying_cap = symbol_object.buying_price * CONSTANT_QUANTITIY_TO_ORDER
-            symbol_object.selling_price = test_historically_for_outcome(symbol_object)
-            symbol_object.selling_cap = symbol_object.selling_price * CONSTANT_QUANTITIY_TO_ORDER
+    print(f'%%% OUTCOME FOR {DAY_OF_TRADE_ANALYSIS_FORMATTED}: %%%')
 
-print(f'%%% OUTCOME FOR {DAY_OF_TRADE_ANALYSIS_FORMATTED}: %%%')
-
-outcomes_of_investments = [symbol_object.calc_profit() for symbol_object in symbol_objects.values() if
-                           symbol_object.calc_profit() is not None]
-if len(outcomes_of_investments) == 0:
-    avg_outcome = 1
-else:
-    avg_outcome = statistics.mean(outcomes_of_investments)
-print(F'AVG OUTCOME - {avg_outcome}')
-app.disconnect()
+    outcomes_of_investments = [symbol_object.calc_profit() for symbol_object in symbol_objects.values() if
+                               symbol_object.calc_profit() is not None]
+    if len(outcomes_of_investments) == 0:
+        avg_outcome = 1
+    else:
+        avg_outcome = statistics.mean(outcomes_of_investments)
+    print(F'AVG OUTCOME - {avg_outcome}')
+    app.disconnect()
 
 # https://filipmolcik.com/headless-ubuntu-server-for-ib-gatewaytws/
