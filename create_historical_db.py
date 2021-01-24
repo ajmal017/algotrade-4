@@ -38,16 +38,7 @@ TIME_TO_PERFROM_CANDLE_ANALYSIS = 59580  # "16:35:00"
 CONSTANT_QUANTITIY_TO_ORDER = 1
 BASE_REQUEST_NUMBER = 1000
 
-
-# SYMBOLS = ['MU']
-# SYMBOLS = ['MU', 'AAPL', 'MSFT', 'JD', 'PDD', 'FSLY', 'BABA']
-SYMBOLS = ["AAPL", "MSFT", "FB", "BABA", "TSM", "V", "JPM", "JNJ", "WMT", "PG", "DIS", "HD"]# "PYPL", "INTC", "VZ",
-           #"NKE", "NVS", "MRK", "TM", "CRM", "ABT", "PEP", "ABBV", "PDD", "ORCL", "BHP", "LLY", "CVX", "QCOM", "DHR"]
-           # "ACN", "NVO", "NEE", "MDT", "TMUS", "UL", "MCD", "TXN", "SAP", "BMY", "BBL", "HON", "UNP", "AMGN", "UPS",
-           # "HDB", "C", "JD", "LIN", "MS", "BUD", "AZN", "LOW", "SNE", "PM", "RY", "SBUX", "SE", "BA", "IBM", "SCHW",
-           # "AMD", "TD", "SQ", "RTX", "CAT", "RIO", "UBER", "TGT", "CVS", "AXP", "AMT", "MMM", "AMAT", "DE",
-           # "DEO", "EL", "SYK", "MU", "NIO", "BIDU", "MDLZ", "TJX", "FIS", "CI", "CNI", "GILD", "ZTS", "BDX", "BEKE",
-           # "NTES", "GM", "FISV", "PLD", "CL", "CSX", "TFC", "CB", "ATVI"]
+SYMBOLS = ["NIO", "NKE", "QCOM", "FB", "LMND", "RUN", "NET"]
 
 
 class WaitList(list):
@@ -135,7 +126,7 @@ class Symbol:
         return self.first_close - self.first_diff
 
     def calc_market_sell_value(self) -> float:
-        return self.first_close + self.first_diff * 2
+        return self.first_close + (self.first_diff * 2)
 
     def calc_profit(self) -> t.Union[float, None]:
         """
@@ -152,6 +143,7 @@ def generate_request_index():
     """
     globals()['BASE_REQUEST_NUMBER'] += 1
     return BASE_REQUEST_NUMBER
+
 
 symbol_objects = {symbol_name: Symbol(symbol_name) for symbol_name in SYMBOLS}
 ID_TO_SYMBOL = {symbol.id: symbol.name for symbol in symbol_objects.values()}
@@ -238,15 +230,16 @@ class IBapi(Wrapper, EClient):
         self.reqHistoricalData(req_id, contract, end_datetime, f'{amount_of_candles * CANDLE_TIME_IN_SECONDS} S',
                                '5 mins', 'TRADES', 0, 1, False, [])
 
-    def get_3_days_historical_data(self):
+    def get_days_historical_data(self, symbol_name: str, amount_of_days: int):
         """
         Fetches 3 business days of market data for all symbols
         """
-        DATES_TO_CONSIDER = get_formatted_end_datetimes()
+        DATES_TO_CONSIDER = get_formatted_end_datetimes(amount_of_days)
 
-        for symbol_name in SYMBOLS:
-            for end_datetime in DATES_TO_CONSIDER:
-                self.request_bars_for_stock(symbol_name, end_datetime)
+        for idx, end_datetime in enumerate(DATES_TO_CONSIDER):
+            self.request_bars_for_stock(symbol_name, end_datetime)
+            if idx % 60 == 0 and idx > 1:
+                time.sleep(20)
         wait_for_no_open_historical_requests()
 
     def order_collected_historical_data(self):
@@ -460,48 +453,20 @@ def wait_for_no_open_historical_requests():
         else:
             return
 
-def main():
-    app = setup_app()
-    api_thread = threading.Thread(target=run_loop, daemon=True)
-    api_thread.start()
-    time.sleep(0.3)
 
-    app.get_3_days_historical_data()
-    get_4fat_values_for_symbols()
-    if TRADE_MODE:
-        wait_for_end_of_candle_for_new_market_day(1)
-    get_first_candle_of_market_day_for_symbols()
+app = setup_app()
+api_thread = threading.Thread(target=run_loop, daemon=True)
+api_thread.start()
+time.sleep(0.3)
 
-    if HISTORICAL_MODE:
-        get_entire_current_day_of_data()
+for symbol_name in SYMBOLS:
+    print(symbol_name)
+    AMOUNT_OF_DAYS = 239
+    app.get_days_historical_data(symbol_name, AMOUNT_OF_DAYS)
+    time.sleep(100)
+    list_of_data = [vars(bar) for bar in sorted(list(app.fetched_data[symbol_name].values()), key=lambda x: x.date)]
+    csv_dataframe = pd.DataFrame.from_dict(list_of_data)
+    # csv_dataframe.append(app.fetched_data[symbol_name])
+    csv_dataframe.to_csv(f'{symbol_name}_{AMOUNT_OF_DAYS}_{DAY_OF_TRADE_ANALYSIS_FORMATTED}.csv', index=False)
 
-    for symbol_name in SYMBOLS:
-        symbol_object = symbol_objects[symbol_name]
-        # print('%%%%%%%%%%%%%')
-        # print(f'{symbol_name}')
-        # print(f'current value - {symbol_object.first_value}')
-        # print(f'4fat - {symbol_object.collected_4fat}')
-        if symbol_object.is_eligible_to_purchase():
-            # print(f'{symbol_object} is good for buying. waiting for passage of candle 1 max value to buy.')
-            symbol_object.intention_to_buy = True
-            if TRADE_MODE:
-                app.place_buy_market(symbol_object.first_max, CONSTANT_QUANTITIY_TO_ORDER, symbol_object.contract)
-            if HISTORICAL_MODE:
-                # print('testing historically')
-                symbol_object.buying_price = symbol_object.first_close
-                symbol_object.buying_cap = symbol_object.buying_price * CONSTANT_QUANTITIY_TO_ORDER
-                symbol_object.selling_price = test_historically_for_outcome(symbol_object)
-                symbol_object.selling_cap = symbol_object.selling_price * CONSTANT_QUANTITIY_TO_ORDER
-
-    print(f'%%% OUTCOME FOR {DAY_OF_TRADE_ANALYSIS_FORMATTED}: %%%')
-
-    outcomes_of_investments = [symbol_object.calc_profit() for symbol_object in symbol_objects.values() if
-                               symbol_object.calc_profit() is not None]
-    if len(outcomes_of_investments) == 0:
-        avg_outcome = 1
-    else:
-        avg_outcome = statistics.mean(outcomes_of_investments)
-    print(F'AVG OUTCOME - {avg_outcome}')
-    app.disconnect()
-
-# https://filipmolcik.com/headless-ubuntu-server-for-ib-gatewaytws/
+app.disconnect()
