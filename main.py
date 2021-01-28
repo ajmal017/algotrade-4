@@ -19,8 +19,8 @@ from ibapi.common import BarData
 
 parser = argparse.ArgumentParser(description='Process some integers.')
 parser.add_argument('--days_back', type=int, default='1')
-parser.add_argument('--trade_mode', type=bool, default=False)
-parser.add_argument('--historical_mode', type=bool, default=True)
+parser.add_argument('--trade_mode', type=bool, default=True)
+parser.add_argument('--historical_mode', type=bool, default=False)
 parser.add_argument('--demo_mode', type=bool, default=True)
 args = parser.parse_args()
 
@@ -38,16 +38,7 @@ TIME_TO_PERFROM_CANDLE_ANALYSIS = 59580  # "16:35:00"
 CONSTANT_QUANTITIY_TO_ORDER = 1
 BASE_REQUEST_NUMBER = 1000
 
-
-# SYMBOLS = ['MU']
-# SYMBOLS = ['MU', 'AAPL', 'MSFT', 'JD', 'PDD', 'FSLY', 'BABA']
-SYMBOLS = ["AAPL", "MSFT", "FB", "BABA", "TSM", "V", "JPM", "JNJ", "WMT", "PG", "DIS", "HD"]# "PYPL", "INTC", "VZ",
-           #"NKE", "NVS", "MRK", "TM", "CRM", "ABT", "PEP", "ABBV", "PDD", "ORCL", "BHP", "LLY", "CVX", "QCOM", "DHR"]
-           # "ACN", "NVO", "NEE", "MDT", "TMUS", "UL", "MCD", "TXN", "SAP", "BMY", "BBL", "HON", "UNP", "AMGN", "UPS",
-           # "HDB", "C", "JD", "LIN", "MS", "BUD", "AZN", "LOW", "SNE", "PM", "RY", "SBUX", "SE", "BA", "IBM", "SCHW",
-           # "AMD", "TD", "SQ", "RTX", "CAT", "RIO", "UBER", "TGT", "CVS", "AXP", "AMT", "MMM", "AMAT", "DE",
-           # "DEO", "EL", "SYK", "MU", "NIO", "BIDU", "MDLZ", "TJX", "FIS", "CI", "CNI", "GILD", "ZTS", "BDX", "BEKE",
-           # "NTES", "GM", "FISV", "PLD", "CL", "CSX", "TFC", "CB", "ATVI"]
+SYMBOLS = ["AAPL", "MSFT", "FB", "BABA", "TSM", "V", "JPM", "JNJ", "WMT", "PG", "DIS", "HD"]
 
 
 class WaitList(list):
@@ -112,7 +103,7 @@ class Symbol:
         """
         checks if last candle is at least 2 dollars, and if not checks if stock is under 100 and candle is above 1.5
         """
-        last_candle_big_enough = self.first_diff > 2 or (self.first_diff > 1.5 and self.first_value < 100)
+        last_candle_big_enough = self.first_diff > 0.2
         # print(f'last_candle_big_enough - {last_candle_big_enough} - {self.first_diff}')
         return last_candle_big_enough
 
@@ -153,6 +144,7 @@ def generate_request_index():
     globals()['BASE_REQUEST_NUMBER'] += 1
     return BASE_REQUEST_NUMBER
 
+
 symbol_objects = {symbol_name: Symbol(symbol_name) for symbol_name in SYMBOLS}
 ID_TO_SYMBOL = {symbol.id: symbol.name for symbol in symbol_objects.values()}
 ORDER_IDS_TO_SYMBOL = {}
@@ -168,9 +160,15 @@ class Client(EClient):
 
 
 class IBapi(Wrapper, EClient):
+    nextorderId = None
+
     def __init__(self):
         EClient.__init__(self, self)
         self.fetched_data = defaultdict(lambda: {})
+
+    def nextValidId(self, orderId: int):
+        super().nextValidId(orderId)
+        self.nextorderId = orderId
 
     def tickPrice(self, reqId: int, tickType: int, price: int, attrib: str):
         """
@@ -202,29 +200,31 @@ class IBapi(Wrapper, EClient):
         Built-in handle response for place_order request after the order status has been changed
         """
         if status == "Filled":
-            # HANDLING FILLED 'BUY LMT' ORDERS
+            # HANDLING FILLED 'BUY' ORDERS
             symbol_name = ORDER_IDS_TO_SYMBOL.get(orderId)
             if symbol_name is not None:
                 print(f'Order to buy was filled for {symbol_name}. buying price was {avgFillPrice}')
-                symbol_object = symbol_objects[symbol_name]
-                symbol_name.is_owned = True
-                symbol_name.intention_to_buy = False
-                symbol_name.buying_price = avgFillPrice
-                symbol_name.buying_cap = mktCapPrice
+                symbol = symbol_objects[symbol_name]
+                symbol.is_owned = True
+                symbol.intention_to_buy = False
+                symbol.buying_price = avgFillPrice
+                symbol.buying_cap = mktCapPrice
                 ORDER_IDS_TO_SYMBOL.pop(orderId)
 
-                bottom_stop_value = symbol_object.calc_stop_value()
-                sell_value = symbol_object.calc_market_sell_value()
-                self.place_sell_stop(bottom_stop_value, CONSTANT_QUANTITIY_TO_ORDER, symbol_object, symbol_name)
-                self.place_sell_limit(sell_value, CONSTANT_QUANTITIY_TO_ORDER, symbol_object, symbol_name)
+                bottom_stop_value = symbol.calc_stop_value()
+                sell_value = symbol.calc_market_sell_value()
+                self.place_order(bottom_stop_value, CONSTANT_QUANTITIY_TO_ORDER, symbol, "SELL", "STP")
+                self.place_order(sell_value, CONSTANT_QUANTITIY_TO_ORDER, symbol, "SELL", "LMT")
+                self.place_order(1000, CONSTANT_QUANTITIY_TO_ORDER, symbol, "SELL", "MOC")
 
-            # HANLDLING FILLED 'SELL' ORDERS
+            # HANDLING FILLED 'SELL' ORDERS
             symbol_name = SELL_IDS_TO_SYMBOL.get(orderId)
             if symbol_name is not None:
                 print(f'Order to sell was filled for {symbol_name}. buying price was {avgFillPrice}')
-                symbol_name.is_owned = False
-                symbol_name.selling_price = avgFillPrice
-                symbol_name.selling_cap = mktCapPrice
+                symbol = symbol_objects[symbol_name]
+                symbol.is_owned = False
+                symbol.selling_price = avgFillPrice
+                symbol.selling_cap = mktCapPrice
                 SELL_IDS_TO_SYMBOL.pop(orderId)
 
     def request_bars_for_stock(self, symbol_name: str, end_datetime: str = '', amount_of_candles: int = 78):
@@ -267,6 +267,27 @@ class IBapi(Wrapper, EClient):
         ORDER_IDS_TO_SYMBOL[self.simplePlaceOid] = symbol_name
         self.placeOrder(self.simplePlaceOid, contract, order)
 
+    def place_order(self, price: int, quantity: int, symbol: Symbol, action: str, order_type: str):
+        allowed_order_types = ["STP", "MKT", "LMT", "MOC"]
+        if order_type not in allowed_order_types:
+            raise ValueError(f'order_type not in {allowed_order_types}')
+        if action == "SELL":
+            SELL_IDS_TO_SYMBOL[self.nextorderId] = symbol.name
+        elif action == "BUY":
+            ORDER_IDS_TO_SYMBOL[self.nextorderId] = symbol.name
+        else:
+            raise ValueError(f'input action isnt one of ["BUY","SELL"]')
+        order = self.create_order_object(action, order_type, price, quantity)
+        self.placeOrder(self.nextorderId, symbol.contract, order)
+
+    def create_order_object(self, action: str, order_type: str, price: float, quantity: float):
+        order = Order()
+        order.action = action
+        order.orderType = order_type
+        order.auxPrice = price
+        order.totalQuantity = quantity
+        return order
+
     def place_sell_stop(self, stop_price: int, quantity: int, contract: Contract, symbol_name: str):
         self.simplePlaceOid = self.nextOrderId()
         order = Order()
@@ -282,6 +303,16 @@ class IBapi(Wrapper, EClient):
         order = Order()
         order.action = "SELL"
         order.orderType = "LMT"
+        order.auxPrice = stop_price
+        order.totalQuantity = quantity
+        SELL_IDS_TO_SYMBOL[self.simplePlaceOid] = symbol_name
+        self.placeOrder(self.simplePlaceOid, contract, order)
+
+    def place_sell_moc(self, stop_price: int, quantity: int, contract: Contract, symbol_name: str):
+        self.simplePlaceOid = self.nextOrderId()
+        order = Order()
+        order.action = "SELL"
+        order.orderType = "MOC"
         order.auxPrice = stop_price
         order.totalQuantity = quantity
         SELL_IDS_TO_SYMBOL[self.simplePlaceOid] = symbol_name
@@ -398,7 +429,7 @@ def update_symbols_current_data():
         # print(f'last data for {symbol_name} on time of {last_candle.date}')
         symbol_objects[symbol_name].first_value = last_candle.close
         symbol_objects[symbol_name].first_volume = last_candle.volume
-        symbol_objects[symbol_name].first_diff = last_candle.close - last_candle.open
+        symbol_objects[symbol_name].first_diff = last_candle.high - last_candle.low
         symbol_objects[symbol_name].first_max = last_candle.high
         symbol_objects[symbol_name].first_close = last_candle.close
 
@@ -460,48 +491,46 @@ def wait_for_no_open_historical_requests():
         else:
             return
 
-def main():
-    app = setup_app()
-    api_thread = threading.Thread(target=run_loop, daemon=True)
-    api_thread.start()
-    time.sleep(0.3)
 
-    app.get_3_days_historical_data()
-    get_4fat_values_for_symbols()
-    if TRADE_MODE:
-        wait_for_end_of_candle_for_new_market_day(1)
-    get_first_candle_of_market_day_for_symbols()
+def wait_for_no_open_orders():
+    while 1:
+        if any([symbol.is_owned for symbol in list(symbol_objects.values())]) or any(
+                [symbol.intention_to_buy for symbol in list(symbol_objects.values())]):
+            time.sleep(0.2)
+        else:
+            return
 
-    if HISTORICAL_MODE:
-        get_entire_current_day_of_data()
 
-    for symbol_name in SYMBOLS:
-        symbol_object = symbol_objects[symbol_name]
-        # print('%%%%%%%%%%%%%')
-        # print(f'{symbol_name}')
-        # print(f'current value - {symbol_object.first_value}')
-        # print(f'4fat - {symbol_object.collected_4fat}')
-        if symbol_object.is_eligible_to_purchase():
-            # print(f'{symbol_object} is good for buying. waiting for passage of candle 1 max value to buy.')
-            symbol_object.intention_to_buy = True
-            if TRADE_MODE:
-                app.place_buy_market(symbol_object.first_max, CONSTANT_QUANTITIY_TO_ORDER, symbol_object.contract)
-            if HISTORICAL_MODE:
-                # print('testing historically')
-                symbol_object.buying_price = symbol_object.first_close
-                symbol_object.buying_cap = symbol_object.buying_price * CONSTANT_QUANTITIY_TO_ORDER
-                symbol_object.selling_price = test_historically_for_outcome(symbol_object)
-                symbol_object.selling_cap = symbol_object.selling_price * CONSTANT_QUANTITIY_TO_ORDER
+app = setup_app()
+api_thread = threading.Thread(target=run_loop, daemon=True)
+api_thread.start()
+time.sleep(0.3)
 
-    print(f'%%% OUTCOME FOR {DAY_OF_TRADE_ANALYSIS_FORMATTED}: %%%')
+app.get_3_days_historical_data()
+get_4fat_values_for_symbols()
 
-    outcomes_of_investments = [symbol_object.calc_profit() for symbol_object in symbol_objects.values() if
-                               symbol_object.calc_profit() is not None]
-    if len(outcomes_of_investments) == 0:
-        avg_outcome = 1
-    else:
-        avg_outcome = statistics.mean(outcomes_of_investments)
-    print(F'AVG OUTCOME - {avg_outcome}')
-    app.disconnect()
+print(app.nextorderId)
+if TRADE_MODE:
+    wait_for_end_of_candle_for_new_market_day(1)
+get_first_candle_of_market_day_for_symbols()
 
+print(f'finished collecting and analyzing historical data, waiting for trading day to begin')
+
+for symbol_name in SYMBOLS:
+    symbol_object = symbol_objects[symbol_name]
+    print(f'{symbol_name} - current value - {symbol_object.first_value}')
+    print(f'4fat - {symbol_object.collected_4fat}')
+
+for symbol_name in SYMBOLS:
+    symbol_object = symbol_objects[symbol_name]
+    if symbol_object.is_eligible_to_purchase():
+        print(f'{symbol_object} is good for buying. waiting for passage of candle 1 max value to buy.')
+        symbol_object.intention_to_buy = True
+        if TRADE_MODE:
+            app.place_order(symbol_object.first_max, CONSTANT_QUANTITIY_TO_ORDER, symbol_object, "BUY", "MKT")
+
+print(f'validating that there are no open requests')
+wait_for_no_open_orders()
+print(f'all orders are completed, closing session')
+app.disconnect()
 # https://filipmolcik.com/headless-ubuntu-server-for-ib-gatewaytws/

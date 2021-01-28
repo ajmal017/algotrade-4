@@ -108,7 +108,7 @@ def test_historically_for_outcome(symbol, dataframe) -> float:
 
 
 for symbol in symbol_objects.values():
-    historical_dataframe = load_historical_data_from_csv_to_dataframe(symbol.name + '.csv')
+    historical_dataframe = load_historical_data_from_csv_to_dataframe('data/' + symbol.name + '.csv')
     days_indexes = get_day_start_positions(historical_dataframe)
     results = []
     real_results = []
