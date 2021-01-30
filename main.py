@@ -85,13 +85,17 @@ class Symbol:
         else:
             self.id = generate_request_index()
         self.max_value_of_4fat = None
+        self.min_value_of_4fat = None
         self.first_value = None
         self.first_volume = None
+        self.first_open = None
         self.first_diff = None
         self.first_close = None
         self.first_max = None
+        self.first_low = None
         self.collected_4fat = None
         self.intention_to_buy = False
+        self.is_short_mode = False
         self.is_owned = False
         self.buying_price = None
         self.buying_cap = None
@@ -103,9 +107,11 @@ class Symbol:
         """
         checks if last candle is at least 2 dollars, and if not checks if stock is under 100 and candle is above 1.5
         """
-        last_candle_big_enough = self.first_diff > 0.2
+        last_candle_big_enough = 5 > self.first_diff > 0.2
+
+        wax_wire_ratio_is_good = self.first_diff < 2 * abs(self.first_close - self.first_open)
         # print(f'last_candle_big_enough - {last_candle_big_enough} - {self.first_diff}')
-        return last_candle_big_enough
+        return last_candle_big_enough and wax_wire_ratio_is_good
 
     def is_last_candle_higher_than_4fat(self) -> bool:
         """
@@ -115,18 +121,39 @@ class Symbol:
         # print(f'higher_than_4fat - {higher_than_4fat}')
         return higher_than_4fat
 
+    def is_first_candle_low_in_range(self) -> bool:
+        """
+        checks if lowest value of first candle is within 5 dollars range from the 20avg
+        """
+        return abs(self.collected_4fat['20avg'] - self.first_close) < 5
+
     def is_eligible_to_purchase(self) -> bool:
         """
         runs all tests on Symbol required to validate purchasing
         """
-        return self.is_last_candle_higher_than_4fat() and self.is_last_candle_big_enough()
+        return self.is_last_candle_higher_than_4fat() and self.is_last_candle_big_enough() \
+               and self.is_first_candle_low_in_range()
+
+    def is_eligible_to_short(self) -> bool:
+        return self.first_value < self.min_value_of_4fat and self.is_last_candle_big_enough() \
+               and self.is_first_candle_low_in_range()
 
     def calc_stop_value(self) -> float:
 
         return self.first_close - self.first_diff
 
     def calc_market_sell_value(self) -> float:
+        if self.first_diff > 4:
+            return self.first_close + self.first_diff * 2
         return self.first_close + self.first_diff * 2
+
+    def short_stop_value(self) -> float:
+        return self.first_close + self.first_diff
+
+    def short_sell_value(self) -> float:
+        if self.first_diff > 4:
+            return self.first_close - self.first_diff
+        return self.first_close - self.first_diff * 2
 
     def calc_profit(self) -> t.Union[float, None]:
         """
@@ -145,10 +172,31 @@ def generate_request_index():
     return BASE_REQUEST_NUMBER
 
 
+def generate_order_id():
+    """
+    Creates a new request index to be used for a API request
+    """
+    globals()['BASE_ORDER_ID'] += 1
+    return BASE_ORDER_ID
+
+
 symbol_objects = {symbol_name: Symbol(symbol_name) for symbol_name in SYMBOLS}
 ID_TO_SYMBOL = {symbol.id: symbol.name for symbol in symbol_objects.values()}
 ORDER_IDS_TO_SYMBOL = {}
 SELL_IDS_TO_SYMBOL = {}
+
+
+def cancel_all_standing_orders_for_stock(stock):
+    print(f'closing all standing orders for {stock.name}')
+    for order_id, v in ORDER_IDS_TO_SYMBOL.items():
+        if v == stock.name:
+            app.cancel_order(order_id)
+            ORDER_IDS_TO_SYMBOL.pop(order_id, None)
+
+    for order_id, v in SELL_IDS_TO_SYMBOL.items():
+        if v == stock.name:
+            app.cancel_order(order_id)
+            SELL_IDS_TO_SYMBOL.pop(order_id, None)
 
 
 class Wrapper(wrapper.EWrapper):
@@ -170,12 +218,6 @@ class IBapi(Wrapper, EClient):
         super().nextValidId(orderId)
         self.nextorderId = orderId
 
-    def tickPrice(self, reqId: int, tickType: int, price: int, attrib: str):
-        """
-        Built-in handle response for request_tick_price request
-        """
-        print(f'[{reqId}] The current ask price is: {price}, ticktype: {TickType}, attrib:{attrib}')
-
     def historicalData(self, reqId: int, bar: BarData):
         """
         Built-in handle response for request_historical_data request
@@ -192,7 +234,7 @@ class IBapi(Wrapper, EClient):
         Built-in handle response for place_order request after it has been placed
         """
         symbol_name = ORDER_IDS_TO_SYMBOL.get(orderId)
-        print(f'open order for {symbol_name} has been performed. current order start - {orderState}')
+        print(f'order [{orderId}] for {symbol_name} has been performed.')
 
     def orderStatus(self, orderId: int, status: str, filled: float, remaining: float, avgFillPrice: float,
                     permId: int, parentId: int, lastFillPrice: float, clientId: int, whyHeld: str, mktCapPrice: float):
@@ -203,7 +245,6 @@ class IBapi(Wrapper, EClient):
             # HANDLING FILLED 'BUY' ORDERS
             symbol_name = ORDER_IDS_TO_SYMBOL.get(orderId)
             if symbol_name is not None:
-                print(f'Order to buy was filled for {symbol_name}. buying price was {avgFillPrice}')
                 symbol = symbol_objects[symbol_name]
                 symbol.is_owned = True
                 symbol.intention_to_buy = False
@@ -213,19 +254,33 @@ class IBapi(Wrapper, EClient):
 
                 bottom_stop_value = symbol.calc_stop_value()
                 sell_value = symbol.calc_market_sell_value()
-                self.place_order(bottom_stop_value, CONSTANT_QUANTITIY_TO_ORDER, symbol, "SELL", "STP")
-                self.place_order(sell_value, CONSTANT_QUANTITIY_TO_ORDER, symbol, "SELL", "LMT")
-                self.place_order(1000, CONSTANT_QUANTITIY_TO_ORDER, symbol, "SELL", "MOC")
+
+                time.sleep(0.5)
+                if not symbol.is_short_mode:
+                    print(f'Order [{orderId}] to buy was filled for {symbol_name}. buying price was {avgFillPrice}'
+                          f'. selling for range - {bottom_stop_value}, {sell_value}')
+                    self.place_order(bottom_stop_value, CONSTANT_QUANTITIY_TO_ORDER, symbol, "SELL", "STP")
+                    self.place_order(sell_value, CONSTANT_QUANTITIY_TO_ORDER, symbol, "SELL", "LMT")
+                    self.place_order(1000, CONSTANT_QUANTITIY_TO_ORDER, symbol, "SELL", "MOC")
+                else:
+                    cancel_all_standing_orders_for_stock(symbol)
 
             # HANDLING FILLED 'SELL' ORDERS
             symbol_name = SELL_IDS_TO_SYMBOL.get(orderId)
             if symbol_name is not None:
-                print(f'Order to sell was filled for {symbol_name}. buying price was {avgFillPrice}')
+                print(f'Order [{orderId}] to sell was filled for {symbol_name}. selling price was {avgFillPrice}')
                 symbol = symbol_objects[symbol_name]
                 symbol.is_owned = False
                 symbol.selling_price = avgFillPrice
                 symbol.selling_cap = mktCapPrice
                 SELL_IDS_TO_SYMBOL.pop(orderId)
+
+                if symbol.is_short_mode:
+                    self.place_order(symbol.short_stop_value(), CONSTANT_QUANTITIY_TO_ORDER, symbol, "BUY", "STP")
+                    self.place_order(symbol.short_buy_value(), CONSTANT_QUANTITIY_TO_ORDER, symbol, "BUY", "LMT")
+                    self.place_order(0, CONSTANT_QUANTITIY_TO_ORDER, symbol, "BUY", "MOC")
+                else:
+                    cancel_all_standing_orders_for_stock(symbol)
 
     def request_bars_for_stock(self, symbol_name: str, end_datetime: str = '', amount_of_candles: int = 78):
         """
@@ -257,66 +312,33 @@ class IBapi(Wrapper, EClient):
         for symbol_name in SYMBOLS:
             self.fetched_data[symbol_name] = OrderedDict(sorted(self.fetched_data[symbol_name].items()))
 
-    def place_buy_market(self, stop_price: int, quantity: int, contract: Contract, symbol_name: str):
-        self.simplePlaceOid = self.nextOrderId()
-        order = Order()
-        order.action = "BUY"
-        order.orderType = "MKT"
-        order.auxPrice = stop_price
-        order.totalQuantity = quantity
-        ORDER_IDS_TO_SYMBOL[self.simplePlaceOid] = symbol_name
-        self.placeOrder(self.simplePlaceOid, contract, order)
-
     def place_order(self, price: int, quantity: int, symbol: Symbol, action: str, order_type: str):
+        order_id = generate_order_id()
         allowed_order_types = ["STP", "MKT", "LMT", "MOC"]
         if order_type not in allowed_order_types:
             raise ValueError(f'order_type not in {allowed_order_types}')
         if action == "SELL":
-            SELL_IDS_TO_SYMBOL[self.nextorderId] = symbol.name
+            SELL_IDS_TO_SYMBOL[order_id] = symbol.name
         elif action == "BUY":
-            ORDER_IDS_TO_SYMBOL[self.nextorderId] = symbol.name
+            ORDER_IDS_TO_SYMBOL[order_id] = symbol.name
         else:
             raise ValueError(f'input action isnt one of ["BUY","SELL"]')
         order = self.create_order_object(action, order_type, price, quantity)
-        self.placeOrder(self.nextorderId, symbol.contract, order)
+        self.placeOrder(order_id, symbol.contract, order)
 
-    def create_order_object(self, action: str, order_type: str, price: float, quantity: float):
+    def create_order_object(self, action: str, order_type: str, price: float, quantity: float, gtd: str = None):
         order = Order()
         order.action = action
         order.orderType = order_type
         order.auxPrice = price
+        order.lmtPrice = price
         order.totalQuantity = quantity
+        if gtd is not None:
+            order.goodTillDate = DAY_OF_TRADE_ANALYSIS_FORMATTED + f" 09:40:00 EST"
         return order
 
-    def place_sell_stop(self, stop_price: int, quantity: int, contract: Contract, symbol_name: str):
-        self.simplePlaceOid = self.nextOrderId()
-        order = Order()
-        order.action = "SELL"
-        order.orderType = "STP"
-        order.auxPrice = stop_price
-        order.totalQuantity = quantity
-        SELL_IDS_TO_SYMBOL[self.simplePlaceOid] = symbol_name
-        self.placeOrder(self.simplePlaceOid, contract, order)
-
-    def place_sell_limit(self, stop_price: int, quantity: int, contract: Contract, symbol_name: str):
-        self.simplePlaceOid = self.nextOrderId()
-        order = Order()
-        order.action = "SELL"
-        order.orderType = "LMT"
-        order.auxPrice = stop_price
-        order.totalQuantity = quantity
-        SELL_IDS_TO_SYMBOL[self.simplePlaceOid] = symbol_name
-        self.placeOrder(self.simplePlaceOid, contract, order)
-
-    def place_sell_moc(self, stop_price: int, quantity: int, contract: Contract, symbol_name: str):
-        self.simplePlaceOid = self.nextOrderId()
-        order = Order()
-        order.action = "SELL"
-        order.orderType = "MOC"
-        order.auxPrice = stop_price
-        order.totalQuantity = quantity
-        SELL_IDS_TO_SYMBOL[self.simplePlaceOid] = symbol_name
-        self.placeOrder(self.simplePlaceOid, contract, order)
+    def cancel_order(self, order_id: int):
+        self.cancelOrder(order_id)
 
 
 def run_loop():
@@ -405,7 +427,9 @@ def get_4fat_values_for_symbols():
             'closing': analyze_for_closing_price(candles_values)
         }
         max_value_of_4fat = max(collected_4fat.values())
+        min_value_of_4fat = min(collected_4fat.values())
         symbol_objects[symbol_name].max_value_of_4fat = max_value_of_4fat
+        symbol_objects[symbol_name].min_value_of_4fat = min_value_of_4fat
         symbol_objects[symbol_name].collected_4fat = collected_4fat
 
 
@@ -427,10 +451,12 @@ def update_symbols_current_data():
         app.fetched_data[symbol_name] = OrderedDict(sorted(app.fetched_data[symbol_name].items()))
         last_candle = list(app.fetched_data[symbol_name].values())[-1]
         # print(f'last data for {symbol_name} on time of {last_candle.date}')
+        symbol_objects[symbol_name].first_open = last_candle.open
         symbol_objects[symbol_name].first_value = last_candle.close
         symbol_objects[symbol_name].first_volume = last_candle.volume
         symbol_objects[symbol_name].first_diff = last_candle.high - last_candle.low
         symbol_objects[symbol_name].first_max = last_candle.high
+        symbol_objects[symbol_name].first_low = last_candle.low
         symbol_objects[symbol_name].first_close = last_candle.close
 
 
@@ -492,13 +518,19 @@ def wait_for_no_open_historical_requests():
             return
 
 
+def open_orders_condition():
+    return any([symbol.is_owned for symbol in list(symbol_objects.values())]) or any(
+        [symbol.intention_to_buy for symbol in list(symbol_objects.values())])
+
+
 def wait_for_no_open_orders():
     while 1:
-        if any([symbol.is_owned for symbol in list(symbol_objects.values())]) or any(
-                [symbol.intention_to_buy for symbol in list(symbol_objects.values())]):
+        if open_orders_condition():
             time.sleep(0.2)
         else:
-            return
+            time.sleep(0.5)
+            if not open_orders_condition():
+                return
 
 
 app = setup_app()
@@ -506,15 +538,16 @@ api_thread = threading.Thread(target=run_loop, daemon=True)
 api_thread.start()
 time.sleep(0.3)
 
+BASE_ORDER_ID = app.nextorderId
+
 app.get_3_days_historical_data()
 get_4fat_values_for_symbols()
 
-print(app.nextorderId)
+print(f'finished collecting and analyzing historical data, waiting for trading day to begin')
+
 if TRADE_MODE:
     wait_for_end_of_candle_for_new_market_day(1)
 get_first_candle_of_market_day_for_symbols()
-
-print(f'finished collecting and analyzing historical data, waiting for trading day to begin')
 
 for symbol_name in SYMBOLS:
     symbol_object = symbol_objects[symbol_name]
@@ -524,13 +557,25 @@ for symbol_name in SYMBOLS:
 for symbol_name in SYMBOLS:
     symbol_object = symbol_objects[symbol_name]
     if symbol_object.is_eligible_to_purchase():
-        print(f'{symbol_object} is good for buying. waiting for passage of candle 1 max value to buy.')
+        print(f'{symbol_object.name} is good for buying.')
+        print(f'{symbol_object.calc_market_sell_value()}, {symbol_object.calc_stop_value()}')
         symbol_object.intention_to_buy = True
         if TRADE_MODE:
-            app.place_order(symbol_object.first_max, CONSTANT_QUANTITIY_TO_ORDER, symbol_object, "BUY", "MKT")
+            app.place_order(symbol_object.first_max, CONSTANT_QUANTITIY_TO_ORDER, symbol_object, "BUY", "LMT")
+            time.sleep(2)  # Wait so that the order is finished processing and a new order can be made
+
+    if symbol_object.is_eligible_to_short() and 1 == 0:
+        print(f'{symbol_object.name} is good for short.')
+        symbol_object.intention_to_buy = True
+        symbol_object.is_short_mode = True
+        if TRADE_MODE:
+            app.place_order(symbol_object.first_low, CONSTANT_QUANTITIY_TO_ORDER, symbol_object, "SELL", "LMT")
 
 print(f'validating that there are no open requests')
 wait_for_no_open_orders()
 print(f'all orders are completed, closing session')
+import pdb
+
+pdb.set_trace()
 app.disconnect()
 # https://filipmolcik.com/headless-ubuntu-server-for-ib-gatewaytws/
